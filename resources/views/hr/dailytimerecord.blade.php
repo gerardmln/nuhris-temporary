@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>Daily Time Record | {{ config('app.name', 'NU HRIS') }}</title>
+    @include('partials.favicon')
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
+</head>
+<body class="min-h-screen bg-[#eceef1] text-slate-900 antialiased">
+    <main class="mx-auto max-w-7xl space-y-5 px-4 py-6 sm:px-6">
+        {{-- Error Notification --}}
+        @if ($errors->has('error'))
+            <div class="rounded-xl border border-red-300 bg-red-50 p-4 shadow-sm" role="alert">
+                <div class="flex items-start gap-3">
+                    <svg class="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <div>
+                        <h3 class="font-semibold text-red-900">Error Loading Daily Time Record</h3>
+                        <p class="text-sm text-red-800">{{ $errors->first('error') }}</p>
+                    </div>
+                </div>
+            </div>
+        @endif
+
+        <a href="{{ route(($adminView ?? false) ? 'admin.dtr.index' : 'timekeeping.index') }}" class="inline-flex items-center gap-2 text-sm font-semibold text-slate-700 hover:text-slate-900" data-testid="back-to-timekeeping">
+            <span>&larr;</span>
+            Back to Time Keeping
+        </a>
+
+        <article class="rounded-xl border border-slate-300 bg-[#cfe1f5] p-4 shadow-sm">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h1 class="text-2xl font-bold text-[#1f2b5d]" data-testid="dtr-employee-name">{{ $employee?->full_name ?? 'Employee' }}</h1>
+                    <p class="text-sm text-slate-600">{{ $employee?->department?->name ?? 'Unassigned' }} | Period: {{ $period_label }}</p>
+                    <p class="text-xs text-slate-600">Approved Schedule: {{ $schedule_summary }}</p>
+                    <p class="text-xs font-semibold text-blue-700">Weekly work hours: {{ $weekly_work_hours }}</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    {{-- Period Selector --}}
+                    <form method="GET" action="{{ route(($adminView ?? false) ? 'admin.dtr.view' : 'timekeeping.dtr') }}" class="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center" data-testid="dtr-period-form">
+                        <input type="hidden" name="employee" value="{{ $employee?->id }}">
+                        <select name="period" onchange="this.form.querySelector('[name=month]').value=this.value.split('-')[0]; this.form.querySelector('[name=year]').value=this.value.split('-')[1]; this.form.submit();"
+                                data-testid="dtr-period-selector"
+                                class="w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-400 focus:outline-none sm:w-auto">
+                            @foreach ($periods as $period)
+                                <option value="{{ $period['month'] }}-{{ $period['year'] }}" {{ $period['selected'] ? 'selected' : '' }}>
+                                    {{ $period['label'] }}
+                                </option>
+                            @endforeach
+                        </select>
+                        <select name="attendance_range" onchange="this.form.submit();"
+                                data-testid="dtr-attendance-range-selector"
+                                class="w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-400 focus:outline-none sm:w-auto">
+                            <option value="month" @selected(($attendanceRange ?? 'month') === 'month')>Total Month</option>
+                            <option value="first_half" @selected(($attendanceRange ?? '') === 'first_half')>1st-15th</option>
+                            <option value="second_half" @selected(($attendanceRange ?? '') === 'second_half')>16th-End</option>
+                        </select>
+                        <input type="hidden" name="month" value="{{ $selectedMonth }}">
+                        <input type="hidden" name="year" value="{{ $selectedYear }}">
+                    </form>
+                </div>
+            </div>
+        </article>
+
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            <article class="rounded-xl border border-slate-300 bg-white p-4 shadow-sm" data-testid="present-days-card">
+                <p class="text-xs text-slate-500">Present Days</p>
+                <p class="text-3xl font-extrabold text-emerald-700">{{ $summary['present_days'] }}</p>
+            </article>
+            <article class="rounded-xl border border-slate-300 bg-white p-4 shadow-sm" data-testid="present-working-days-card">
+                <p class="text-xs text-slate-500">Present / Working Days</p>
+                <p class="text-3xl font-extrabold text-teal-700">{{ $summary['present_working_days'] }} / {{ $summary['working_days'] }}</p>
+            </article>
+            <article class="rounded-xl border border-slate-300 bg-white p-4 shadow-sm" data-testid="absent-days-card">
+                <p class="text-xs text-slate-500">Absent Days</p>
+                <p class="text-3xl font-extrabold text-red-600">{{ $summary['absent_days'] }}</p>
+            </article>
+            <article class="rounded-xl border border-slate-300 bg-white p-4 shadow-sm" data-testid="tardiness-card">
+                <p class="text-xs text-slate-500">Total Tardiness</p>
+                <p class="text-3xl font-extrabold text-amber-600">{{ $summary['tardiness_total'] }} min</p>
+            </article>
+            <article class="rounded-xl border border-slate-300 bg-white p-4 shadow-sm" data-testid="undertime-card">
+                <p class="text-xs text-slate-500">Total Undertime</p>
+                <p class="text-3xl font-extrabold text-violet-600">{{ $summary['undertime_total'] }} min</p>
+            </article>
+            <article class="rounded-xl border border-slate-300 bg-white p-4 shadow-sm" data-testid="worked-hours-card">
+                <p class="text-xs text-slate-500">Total Hours Worked</p>
+                <p class="text-3xl font-extrabold text-blue-700">
+                    {{ intdiv($summary['worked_minutes'], 60) }}h {{ str_pad($summary['worked_minutes'] % 60, 2, '0', STR_PAD_LEFT) }}m
+                </p>
+            </article>
+        </div>
+
+        {{-- Export Buttons --}}
+        <div class="flex flex-wrap gap-2" data-testid="export-buttons">
+            <a href="{{ route(($adminView ?? false) ? 'admin.dtr.view.export-pdf' : 'timekeeping.dtr.export-pdf', ['employee' => $employee?->id, 'month' => $selectedMonth, 'year' => $selectedYear, 'attendance_range' => $attendanceRange ?? 'month']) }}"
+               data-testid="export-pdf-button"
+               class="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 shadow-sm transition hover:bg-red-50">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                Export PDF
+            </a>
+            <a href="{{ route(($adminView ?? false) ? 'admin.dtr.view.export-excel' : 'timekeeping.dtr.export-excel', ['employee' => $employee?->id, 'month' => $selectedMonth, 'year' => $selectedYear, 'attendance_range' => $attendanceRange ?? 'month']) }}"
+               data-testid="export-excel-button"
+               class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-50">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                Export Excel
+            </a>
+        </div>
+
+        <article class="overflow-x-auto rounded-xl border border-slate-300 bg-white p-4 shadow-sm" data-testid="dtr-table-container">
+            <table class="min-w-full text-left text-sm" data-testid="dtr-table">
+                <thead class="bg-slate-100 text-slate-600">
+                    <tr>
+                        <th class="px-3 py-2">Date</th>
+                        <th class="px-3 py-2">Day</th>
+                        <th class="px-3 py-2">Time In</th>
+                        <th class="px-3 py-2">Time Out</th>
+                        <th class="px-3 py-2">Tardiness</th>
+                        <th class="px-3 py-2">Undertime</th>
+                        <th class="px-3 py-2">Status</th>
+                        @if ($adminView ?? false)
+                            <th class="px-3 py-2">Actions</th>
+                        @endif
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200">
+                    @foreach ($records as $record)
+                        <tr class="{{ $record['status'] === 'Weekend' ? 'bg-slate-50 text-slate-400' : ($record['status'] === 'Non-working day' ? 'bg-amber-50/40' : ($record['status'] === 'Not Present' ? 'bg-red-50/40' : '')) }}">
+                            <td class="px-3 py-2">{{ $record['date'] }}</td>
+                            <td class="px-3 py-2">{{ $record['day'] }}</td>
+                            <td class="px-3 py-2 {{ ($record['tardiness_minutes'] ?? 0) > 0 ? 'font-semibold text-red-600' : '' }}">{{ $record['time_in'] }}</td>
+                            <td class="px-3 py-2 {{ ($record['undertime_minutes'] ?? 0) > 0 ? 'font-semibold text-red-600' : '' }}">{{ $record['time_out'] }}</td>
+                            <td class="px-3 py-2">{{ $record['tardiness_minutes'] ? $record['tardiness_minutes'].' min' : '-' }}</td>
+                            <td class="px-3 py-2">{{ $record['undertime_minutes'] ? $record['undertime_minutes'].' min' : '-' }}</td>
+                            <td class="px-3 py-2">
+                                @if($record['status'] === 'Present')
+                                    <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Present{{ ! empty($record['status_reason']) ? ' / '.$record['status_reason'] : '' }}</span>
+                                @elseif($record['status'] === 'Not Present')
+                                    <span class="inline-flex rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">Not Present</span>
+                                @elseif($record['status'] === 'Non-working day')
+                                    <span class="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">Non-working day</span>
+                                @elseif($record['status'] === 'Weekend')
+                                    <span class="inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-500">Weekend</span>
+                                @else
+                                    <span class="text-slate-400">{{ $record['status'] }}</span>
+                                @endif
+                            </td>
+                            @if ($adminView ?? false)
+                                <td class="relative px-3 py-2">
+                                    <div class="relative inline-block text-left">
+                                        <button type="button" class="dtr-row-actions-toggle inline-flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200" aria-expanded="false" aria-haspopup="true">&middot;&middot;&middot;</button>
+                                        <div class="dtr-row-actions-menu absolute right-2 top-full z-50 mt-1 hidden w-36 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                                            <div class="py-1">
+                                                @if (!empty($record['attendance_id']))
+                                                    <a href="{{ route('admin.dtr.edit', $record['attendance_id']) }}" class="block px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">Edit</a>
+                                                @elseif (empty($record['is_future']))
+                                                    <form method="POST" action="{{ route('admin.dtr.create') }}">
+                                                        @csrf
+                                                        <input type="hidden" name="employee_id" value="{{ $employee?->id }}">
+                                                        <input type="hidden" name="record_date" value="{{ $record['iso_date'] }}">
+                                                        <button type="submit" class="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Add</button>
+                                                    </form>
+                                                @else
+                                                    <span class="block px-4 py-2 text-sm text-slate-400">—</span>
+                                                @endif
+                                            </div>
+                                        </div>
+                                    </div>
+                                </td>
+                            @endif
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
+        </article>
+    </main>
+    @if ($adminView ?? false)
+        <script @cspNonce>
+            document.querySelectorAll('.dtr-row-actions-toggle').forEach((toggle) => {
+                toggle.addEventListener('click', () => {
+                    const menu = toggle.parentElement.querySelector('.dtr-row-actions-menu');
+                    document.querySelectorAll('.dtr-row-actions-menu').forEach((otherMenu) => {
+                        if (otherMenu !== menu) {
+                            otherMenu.classList.add('hidden');
+                        }
+                    });
+                    menu.classList.toggle('hidden');
+                    toggle.setAttribute('aria-expanded', String(!menu.classList.contains('hidden')));
+                });
+            });
+        </script>
+    @endif
+</body>
+</html>

@@ -1,0 +1,139 @@
+@php
+    $isEdit = isset($employee);
+    $showEmployeeIdInput = $showEmployeeIdInput ?? false;
+    $submitLabel = $submitLabel ?? ($isEdit ? 'Update Employee' : 'Create Employee');
+    $facultyPositions = $facultyPositions ?? [];
+    $aspPositions = $aspPositions ?? [];
+@endphp
+
+@php
+    $cancelRoute = $cancelRoute ?? route('employees.index');
+@endphp
+
+<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+    @if ($isEdit || $showEmployeeIdInput)
+        <div>
+            <label for="employee_id" class="mb-1 block text-sm font-semibold text-slate-700">Employee ID *</label>
+            <input id="employee_id" name="employee_id" type="text" value="{{ old('employee_id', $employee->employee_id ?? '') }}" placeholder="e.g. 23-8035 or 238035" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" required>
+            @if ($showEmployeeIdInput && ! $isEdit)
+                <p class="mt-2 text-sm text-slate-500">Enter the existing Employee ID. Format: YY-XXXXX (e.g. 23-8035, 24-08052). The system accepts both with and without dash.</p>
+            @endif
+            @error('employee_id')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+        </div>
+    @else
+        <div class="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-3 md:col-span-2">
+            <p class="text-sm font-semibold text-slate-700">Employee ID</p>
+            <p class="text-sm text-slate-500">HR can leave this blank to auto-generate an ID on save, or enter an existing employee ID to link a current record.</p>
+        </div>
+    @endif
+
+    <div>
+        <label for="email" class="mb-1 block text-sm font-semibold text-slate-700">Email *</label>
+        <input id="email" name="email" type="email" value="{{ old('email', $employee->email ?? '') }}" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" required>
+        @error('email')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+    </div>
+
+    <div>
+        <label for="first_name" class="mb-1 block text-sm font-semibold text-slate-700">First Name *</label>
+        <input id="first_name" name="first_name" type="text" value="{{ old('first_name', $employee->first_name ?? '') }}" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" required>
+        @error('first_name')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+    </div>
+
+    <div>
+        <label for="last_name" class="mb-1 block text-sm font-semibold text-slate-700">Last Name *</label>
+        <input id="last_name" name="last_name" type="text" value="{{ old('last_name', $employee->last_name ?? '') }}" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" required>
+        @error('last_name')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+    </div>
+
+    <div>
+        <label for="employment_type" class="mb-1 block text-sm font-semibold text-slate-700">Employee Type *</label>
+        <select id="employment_type" name="employment_type" data-employee-control="employment_type" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" required>
+            <option value="">Select Type</option>
+            @foreach ($employmentTypes as $type)
+                <option value="{{ $type }}" @selected(old('employment_type', $employee->employment_type ?? '') === $type)>
+                    {{ $type }}
+                </option>
+            @endforeach
+        </select>
+        @error('employment_type')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+    </div>
+
+    <div data-employee-field="employment_status">
+        <label for="employment_status" class="mb-1 block text-sm font-semibold text-slate-700">Employment Status *</label>
+        <select id="employment_status" name="employment_status" data-employee-control="employment_status" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" required>
+            <option value="regular" @selected(old('employment_status', $employee->employment_status ?? 'probationary') === 'regular')>Regular</option>
+            <option value="probationary" @selected(old('employment_status', $employee->employment_status ?? 'probationary') === 'probationary')>Probationary</option>
+        </select>
+        <input type="hidden" data-employee-control="employment_status_hidden" value="probationary" disabled>
+        <p data-employee-help="employment_status" class="mt-1 hidden text-xs text-slate-500">Part-time and contractual faculty are always probationary.</p>
+        @error('employment_status')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+    </div>
+
+    <div data-employee-field="department">
+        <label for="department_id" class="mb-1 block text-sm font-semibold text-slate-700">Department *</label>
+        <input type="hidden" name="department_id" data-employee-control="department_hidden" value="{{ old('department_id', $employee->department_id ?? '') }}" disabled>
+        <select id="department_id" name="department_id" data-employee-control="department" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500">
+            <option value="">Select Department</option>
+            @foreach ($departments as $department)
+                <option value="{{ $department->id }}" @selected(old('department_id', $employee->department_id ?? '') == $department->id)>
+                    {{ $department->name }}
+                </option>
+            @endforeach
+        </select>
+        @error('department_id')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+    </div>
+
+    <div data-employee-field="position">
+        <label for="position" class="mb-1 block text-sm font-semibold text-slate-700">Rank *</label>
+        <select id="position" name="position" data-employee-control="position" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none" required>
+            <option value="">Select Rank / Office</option>
+            @foreach ($facultyPositions as $position)
+                <option value="{{ $position }}" data-employment-category="faculty" @selected(old('position', $employee->position ?? '') === $position)>
+                    {{ $position }}
+                </option>
+            @endforeach
+            @foreach ($aspPositions as $position)
+                <option value="{{ $position }}" data-employment-category="asp" @selected(old('position', $employee->position ?? '') === $position)>
+                    {{ $position }}
+                </option>
+            @endforeach
+        </select>
+        <p class="mt-1 text-xs text-slate-500">Options are filtered by the selected Employee Type and Department.</p>
+        @error('position')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+    </div>
+
+    <div data-employee-field="ranking">
+        <label for="ranking" class="mb-1 block text-sm font-semibold text-slate-700">Level</label>
+        <select id="ranking" name="ranking" data-employee-control="ranking" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none">
+            <option value="">N/A</option>
+            @foreach ($facultyRankings as $ranking)
+                <option value="{{ $ranking }}" @selected(old('ranking', $employee->ranking ?? '') === $ranking)>
+                    {{ $ranking }}
+                </option>
+            @endforeach
+        </select>
+        @error('ranking')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+    </div>
+
+    <div>
+        <label for="hire_date" class="mb-1 block text-sm font-semibold text-slate-700">Hire Date</label>
+        <input id="hire_date" name="hire_date" type="date" value="{{ old('hire_date', isset($employee->hire_date) ? $employee->hire_date?->format('Y-m-d') : '') }}" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none">
+        @error('hire_date')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+    </div>
+</div>
+
+@unless ($isEdit)
+    <div class="mt-6 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+        <p class="font-semibold">Login account will be auto-created</p>
+        <p class="mt-1 text-blue-700">
+            After saving, NU HRIS will generate a temporary password for this employee.
+        </p>
+    </div>
+@endunless
+
+<div class="mt-6 flex items-center justify-end gap-3">
+    <a href="{{ $cancelRoute }}" class="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Cancel</a>
+    <button type="submit" class="rounded-md bg-[#00386f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#002f5d]">
+        {{ $submitLabel }}
+    </button>
+</div>

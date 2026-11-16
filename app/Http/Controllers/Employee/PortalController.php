@@ -1,0 +1,976 @@
+<?php
+
+namespace App\Http\Controllers\Employee;
+
+use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreEmployeeCredentialRequest;
+use App\Http\Requests\StoreDegreeSubmissionRequest;
+use App\Models\Announcement;
+use App\Models\AnnouncementNotification;
+use App\Models\AcademicCalendarEntry;
+use App\Models\AttendanceRecord;
+use App\Models\Department;
+use App\Models\Employee;
+use App\Models\EmployeeCredential;
+use App\Models\EmployeeScheduleSubmission;
+use App\Models\User;
+use App\Services\EmployeeScheduleService;
+use App\Services\LeaveBalanceService;
+use App\Services\SupabaseAuthSyncService;
+use App\Services\SupabaseStorageService;
+use App\Support\EmployeeWorkTimeConstraints;
+use Carbon\Carbon;
+use Illuminate\Http\Request;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
+use Illuminate\View\View;
+
+class PortalController extends Controller
+{
+    private const ALLOWED_TERM_LABELS = [
+        '1st Term',
+        '2nd Term',
+        '3rd Term',
+    ];
+
+    public function dashboard(Request $request): View
+    {
+        $user = $request->user();
+        $employee = Employee::query()->with('department')->where('email', $user->email)->first();
+
+        $recentAnnouncements = AnnouncementNotification::query()
+            ->visible()
+            ->with('announcement')
+            ->where('user_id', $user->id)
+            ->latest()
+            ->limit(3)
+            ->get();
+
+        $academicCalendarEntries = AcademicCalendarEntry::query()
+            ->orderBy('event_date')
+            ->get();
+
+        $monthStart = now()->startOfMonth();
+        $monthEnd = now()->endOfMonth();
+
+        $monthEntries = $academicCalendarEntries
+            ->filter(fn (AcademicCalendarEntry $entry) => $entry->event_date->betweenIncluded($monthStart->copy()->startOfDay(), $monthEnd->copy()->endOfDay()))
+            ->values();
+
+        $upcomingEntries = $academicCalendarEntries
+            ->filter(fn (AcademicCalendarEntry $entry) => $entry->event_date->gte(today()->startOfDay()))
+            ->sortBy('event_date')
+            ->take(5)
+            ->values();
+
+        $calendarEvents = $upcomingEntries
+            ->map(fn (AcademicCalendarEntry $entry) => sprintf('%s - %s (%s)', $entry->event_date->format('M d'), $entry->title, $entry->type_label))
+            ->values();
+
+        $academicCalendarPayload = $academicCalendarEntries
+            ->map(fn (AcademicCalendarEntry $entry) => [
+                'id' => $entry->id,
+                'title' => $entry->title,
+                'entry_type' => $entry->entry_type,
+                'day_type' => $entry->day_type,
+                'event_date' => $entry->event_date->toDateString(),
+                'description' => $entry->description,
+                'type_label' => $entry->type_label,
+                'badge_class' => $entry->badge_class,
+            ])
+            ->values();
+
+        $calendarCells = [];
+        $dayPointer = $monthStart->copy()->startOfWeek(Carbon::SUNDAY);
+        $gridEnd = $monthEnd->copy()->endOfWeek(Carbon::SATURDAY);
+
+        while ($dayPointer->lte($gridEnd)) {
+            if ($dayPointer->month !== $monthStart->month) {
+                $calendarCells[] = null;
+                $dayPointer->addDay();
+                continue;
+            }
+
+            $entriesForDay = $monthEntries->filter(fn (AcademicCalendarEntry $entry) => $entry->event_date->isSameDay($dayPointer))->values();
+
+            $calendarCells[] = [
+                'date' => $dayPointer->copy(),
+                'day' => (int) $dayPointer->format('j'),
+                'is_today' => $dayPointer->isToday(),
+                'entries' => $entriesForDay,
+            ];
+
+            $dayPointer->addDay();
+        }
+
+        $monthStart = now()->startOfMonth();
+        $monthEnd = now()->endOfMonth();
+        $firstCutoffEnd = $monthStart->copy()->day(15);
+        $secondCutoffStart = $monthStart->copy()->day(16);
+
+        $presentDaysFirstCutoff = 0;
+        $presentDaysSecondCutoff = 0;
+        $latestApprovedSchedule = null;
+
+        if ($employee) {
+            $presentDaysFirstCutoff = AttendanceRecord::query()
+                ->where('employee_id', $employee->id)
+                ->where('status', 'present')
+                ->whereBetween('record_date', [$monthStart->toDateString(), $firstCutoffEnd->toDateString()])
+                ->count();
+
+            $presentDaysSecondCutoff = AttendanceRecord::query()
+                ->where('employee_id', $employee->id)
+                ->where('status', 'present')
+                ->whereBetween('record_date', [$secondCutoffStart->toDateString(), $monthEnd->toDateString()])
+                ->count();
+
+            $latestApprovedSchedule = EmployeeScheduleSubmission::query()
+                ->where('employee_id', $employee->id)
+                ->where('status', EmployeeScheduleSubmission::STATUS_APPROVED)
+                ->latest('reviewed_at')
+                ->latest('updated_at')
+                ->first();
+        }
+
+        return view('employee.dashboard', [
+            'employee' => $employee,
+            'stats' => [
+                'announcements' => $recentAnnouncements->count(),
+            ],
+            'presentDays' => [
+                'first_cutoff' => $presentDaysFirstCutoff,
+                'second_cutoff' => $presentDaysSecondCutoff,
+            ],
+            'latestApprovedSchedule' => $latestApprovedSchedule,
+            'recentAnnouncements' => $recentAnnouncements,
+            'calendar' => [
+                'month_label' => now()->format('F Y'),
+                'today' => (int) now()->format('j'),
+                'cells' => $calendarCells,
+                'events' => $calendarEvents,
+            ],
+            'academicCalendarEntries' => $academicCalendarPayload,
+        ]);
+    }
+
+    public function announcements(Request $request): View
+    {
+        $announcements = AnnouncementNotification::query()
+            ->visible()
+            ->whereHas('announcement', fn ($query) => $query->announcements())
+            ->with('announcement')
+            ->where('user_id', $request->user()->id)
+            ->latest()
+            ->get();
+
+        return view('employee.announcements', compact('announcements'));
+    }
+
+    public function credentials(Request $request): View
+    {
+        $employee = Employee::query()->with('department')->where('email', $request->user()->email)->first();
+
+        $credentials = $employee
+            ? EmployeeCredential::query()->where('employee_id', $employee->id)->latest()->get()
+            : collect();
+
+        $mapped = $credentials->map(function (EmployeeCredential $credential) {
+            $resumeYear = (int) ($credential->created_at?->year ?? now()->year);
+            $resumeAcademicYearTitle = sprintf('Resume A.Y. %d-%d', $resumeYear, $resumeYear + 1);
+
+            return [
+                'id' => $credential->id,
+                'type' => $credential->credential_type,
+                'label' => match ($credential->credential_type) {
+                    'resume' => 'Resume',
+                    'prc' => 'PRC License',
+                    'seminars' => 'Seminars',
+                    'degrees' => 'Degrees',
+                    default => 'Ranking',
+                },
+                'title' => $credential->credential_type === 'resume'
+                    ? ((blank($credential->title) || $credential->title === 'Resume') ? $resumeAcademicYearTitle : $credential->title)
+                    : ($credential->title ?: match ($credential->credential_type) {
+                        'prc' => 'PRC License',
+                        'seminars' => 'Seminar / Training',
+                        'degrees' => 'Academic Degree',
+                        default => 'Ranking File',
+                    }),
+                'status' => ucfirst(str_replace('_', ' ', $credential->status)),
+                'status_raw' => $credential->status,
+                'is_expired' => $credential->isExpired(),
+                'is_expiring_soon' => $credential->status === 'verified' && $credential->isExpiringSoon(),
+                'expires_at' => $credential->effectiveExpiresAt()?->format('M d, Y'),
+                'has_file' => filled($credential->file_path),
+                'original_filename' => $credential->original_filename,
+                'review_notes' => $credential->review_notes,
+                'reviewed_at' => $credential->reviewed_at?->format('M d, Y'),
+                'updated_at' => $credential->updated_at,
+            ];
+        });
+
+        $byType = $mapped->groupBy('type')->map->count();
+
+        return view('employee.credentials', [
+            'credentials' => $mapped,
+            'credentialCounts' => [
+                'all' => $mapped->count(),
+                'resume' => (int) $byType->get('resume', 0),
+                'prc' => (int) $byType->get('prc', 0),
+                'seminars' => (int) $byType->get('seminars', 0),
+                'degrees' => (int) $byType->get('degrees', 0),
+                'ranking' => (int) $byType->get('ranking', 0),
+            ],
+        ]);
+    }
+
+    public function credentialsUpload(Request $request): View
+    {
+        $employee = Employee::query()->with('department')->where('email', $request->user()->email)->first();
+
+        return view('employee.credentials-upload', [
+            'employee' => $employee,
+        ]);
+    }
+
+    public function storeCredential(StoreEmployeeCredentialRequest $request, SupabaseStorageService $storage): RedirectResponse
+    {
+        $employee = Employee::query()->where('email', $request->user()->email)->first();
+
+        if (! $employee) {
+            return redirect()->route('employee.credentials')->with('error', 'Employee profile not found. Please contact HR.');
+        }
+
+        $filePath = null;
+        $originalFilename = null;
+
+        if ($request->hasFile('credential_file')) {
+            if (! $storage->isEnabled()) {
+                return back()->withInput()->with('error', 'File storage is not configured. Please contact the administrator.');
+            }
+
+            try {
+                $filePath = $storage->uploadFile($request->file('credential_file'), 'employee-'.$employee->id);
+                $originalFilename = $request->file('credential_file')->getClientOriginalName();
+            } catch (\Throwable $e) {
+                return back()
+                    ->withInput()
+                    ->with('error', 'File upload failed: '.$e->getMessage());
+            }
+        }
+
+        $credentialType = $request->string('credential_type')->toString();
+        $expiresAt = match ($credentialType) {
+            'resume' => now()->addYear()->toDateString(),
+            'prc' => $request->input('expires_at'),
+            default => null,
+        };
+        $credentialTypeLabel = match ($credentialType) {
+            'resume' => 'Resume',
+            'prc' => 'PRC License',
+            'seminars' => 'Seminar / Training',
+            'degrees' => 'Academic Degree',
+            default => 'Ranking File',
+        };
+        $submissionYear = (int) now()->year;
+        $resumeAcademicYearTitle = sprintf('Resume A.Y. %d-%d', $submissionYear, $submissionYear + 1);
+        $title = in_array($credentialType, ['seminars', 'degrees'], true)
+            ? trim($request->string('title')->toString())
+            : ($credentialType === 'resume' ? $resumeAcademicYearTitle : $credentialTypeLabel);
+
+        DB::transaction(function () use ($request, $employee, $filePath, $originalFilename, $credentialType, $credentialTypeLabel, $title, $expiresAt): void {
+            $credential = EmployeeCredential::create([
+                'employee_id' => $employee->id,
+                'credential_type' => $credentialType,
+                'title' => $title,
+                'department_id' => $employee->department_id,
+                'expires_at' => $expiresAt,
+                'description' => $request->input('description'),
+                'file_path' => $filePath,
+                'original_filename' => $originalFilename,
+                'status' => 'pending',
+            ]);
+
+            if ($credentialType === 'resume') {
+                $employee->forceFill([
+                    'resume_last_updated_at' => now()->toDateString(),
+                ])->save();
+            }
+
+            $announcementContent = $title
+                ? sprintf(
+                    '%s uploaded a %s credential titled "%s" and it is awaiting HR review.',
+                    $employee->full_name,
+                    $credentialTypeLabel,
+                    $title
+                )
+                : sprintf(
+                    '%s uploaded a %s credential and it is awaiting HR review.',
+                    $employee->full_name,
+                    $credentialTypeLabel
+                );
+
+            $hrAnnouncement = Announcement::forceCreate([
+                'title' => 'New credential uploaded',
+                'content' => $announcementContent,
+                'priority' => 'medium',
+                'target_user_type' => User::TYPE_HR,
+                'published_at' => now(),
+                'is_published' => true,
+                'created_by' => $request->user()->id,
+            ]);
+
+            $hrUserIds = User::query()
+                ->where('user_type', User::TYPE_HR)
+                ->pluck('id');
+
+            $rows = $hrUserIds->map(fn ($userId) => [
+                'announcement_id' => $hrAnnouncement->id,
+                'user_id' => $userId,
+                'is_read' => false,
+                'read_at' => null,
+                'redirect_url' => route('credentials.index'),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ])->all();
+
+            if (! empty($rows)) {
+                AnnouncementNotification::insert($rows);
+            }
+        });
+
+        return redirect()->route('employee.credentials')->with('success', 'Credential uploaded successfully. It is now pending HR review.');
+    }
+
+    public function viewCredentialFile(Request $request, EmployeeCredential $credential, SupabaseStorageService $storage): View|RedirectResponse
+    {
+        $employee = Employee::query()->where('email', $request->user()->email)->firstOrFail();
+
+        abort_unless($credential->employee_id === $employee->id, 403);
+
+        if (! $credential->file_path) {
+            return back()->with('error', 'No file was attached to this credential.');
+        }
+
+        if (! $storage->isEnabled()) {
+            return back()->with('error', 'File storage is not configured. Please contact the administrator.');
+        }
+
+        $url = $storage->createSignedUrl($credential->file_path, 300);
+
+        if (! $url) {
+            return back()->with('error', 'Unable to generate a download link. Please try again.');
+        }
+
+        if (strtolower(pathinfo($credential->original_filename ?: $credential->file_path, PATHINFO_EXTENSION)) === 'pdf') {
+            return redirect()->away($url);
+        }
+
+        return view('files.preview', [
+            'url' => $url,
+            'filename' => $credential->original_filename ?: basename($credential->file_path),
+        ]);
+    }
+
+    public function destroyCredential(Request $request, EmployeeCredential $credential, SupabaseStorageService $storage): RedirectResponse
+    {
+        $employee = Employee::query()->where('email', $request->user()->email)->firstOrFail();
+
+        abort_unless($credential->employee_id === $employee->id, 403);
+
+        $credentialType = $credential->credential_type;
+        $filePath = $credential->file_path;
+
+        DB::transaction(function () use ($employee, $credential, $credentialType): void {
+            $credential->delete();
+
+            if ($credentialType === 'resume') {
+                $latestResume = EmployeeCredential::query()
+                    ->where('employee_id', $employee->id)
+                    ->where('credential_type', 'resume')
+                    ->where('status', 'verified')
+                    ->latest('updated_at')
+                    ->first();
+
+                $employee->forceFill([
+                    'resume_last_updated_at' => $latestResume?->updated_at?->toDateString(),
+                ])->save();
+            }
+        });
+
+        if ($filePath && $storage->isEnabled()) {
+            $storage->delete($filePath);
+        }
+
+        return redirect()->route('employee.credentials')->with('success', 'Credential deleted successfully.');
+    }
+
+    public function attendance(Request $request, EmployeeScheduleService $scheduleService): View
+    {
+        $employee = Employee::query()->where('email', $request->user()->email)->first();
+        $systemStart = Carbon::create(2026, 4, 1)->startOfDay();
+        $selectedDate = Carbon::createFromDate(
+            $request->integer('year', now()->year),
+            $request->integer('month', now()->month),
+            1
+        );
+        $currentMonth = now()->startOfMonth();
+        $periods = collect();
+
+        if ($currentMonth->gte($systemStart->copy()->startOfMonth())) {
+            for ($period = $currentMonth->copy(); $period->gte($systemStart->copy()->startOfMonth()); $period->subMonth()) {
+                $periods->push([
+                    'label' => $period->format('F Y'),
+                    'month' => $period->month,
+                    'year' => $period->year,
+                    'selected' => $period->isSameMonth($selectedDate),
+                ]);
+            }
+        }
+
+        $periodStart = $selectedDate->copy()->startOfMonth()->max($systemStart);
+        $periodEnd = $selectedDate->isSameMonth(now())
+            ? now()->copy()->endOfDay()
+            : ($selectedDate->isFuture() ? $selectedDate->copy()->startOfMonth()->subDay()->endOfDay() : $selectedDate->copy()->endOfMonth());
+
+        $records = $employee && $periodEnd->gte($periodStart)
+            ? $employee->attendanceRecords()
+                ->whereBetween('record_date', [$periodStart->toDateString(), $periodEnd->toDateString()])
+                ->orderByDesc('record_date')
+                ->get()
+            : collect();
+        $currentSchedule = $employee ? $scheduleService->currentSubmission($employee) : null;
+        $canEditSchedule = ! ($currentSchedule && in_array($currentSchedule->status, [EmployeeScheduleSubmission::STATUS_PENDING, EmployeeScheduleSubmission::STATUS_APPROVED], true));
+
+        $totals = [
+            'tardiness' => $records->sum('tardiness_minutes'),
+            'undertime' => $records->sum('undertime_minutes'),
+            'overtime' => $records->sum('overtime_minutes'),
+            'absences' => $employee
+                ? $scheduleService->countDtrAbsences($employee, $periodStart->copy()->startOfDay(), $periodEnd->copy()->startOfDay())
+                : 0,
+            'workload_credits' => $records->filter(fn ($record) => $record->status === 'present' && $record->schedule_status === 'validated')->count(),
+        ];
+
+        $overallResult = $this->buildAttendanceResult($totals, $currentSchedule, $records->isNotEmpty());
+
+        $mappedRecords = $records->map(function ($record) use ($scheduleService, $employee) {
+            $statusLabel = match ($record->schedule_status) {
+                'no_schedule' => 'No schedule available',
+                'non_working_day' => 'Non-working day',
+                default => ucfirst(str_replace('_', ' ', $record->status)),
+            };
+
+            $scheduledIn = null;
+            $scheduledOut = null;
+
+            if ($record->scheduled_time_in && $record->scheduled_time_out) {
+                $scheduledIn = $record->scheduled_time_in?->format('h:i A');
+                $scheduledOut = $record->scheduled_time_out?->format('h:i A');
+            } else {
+                // Derive scheduled times from the employee's approved schedule for that date
+                try {
+                    $evaluation = $scheduleService->evaluateDailyRecord($employee, $record->record_date, $record->time_in?->format('H:i') ?? null, $record->time_out?->format('H:i') ?? null);
+                    if (! in_array($evaluation['schedule_status'], ['no_schedule', 'non_working_day'], true)) {
+                        if (! empty($evaluation['scheduled_time_in'])) {
+                            $scheduledIn = \Carbon\Carbon::createFromFormat('H:i:s', $evaluation['scheduled_time_in'])->format('h:i A');
+                        }
+                        if (! empty($evaluation['scheduled_time_out'])) {
+                            $scheduledOut = \Carbon\Carbon::createFromFormat('H:i:s', $evaluation['scheduled_time_out'])->format('h:i A');
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    // fallback: leave scheduled times null
+                }
+            }
+
+            $scheduledLabel = ($scheduledIn || $scheduledOut)
+                ? (($scheduledIn ?? 'N/A').' - '.($scheduledOut ?? 'N/A'))
+                : ucfirst(str_replace('_', ' ', (string) $record->schedule_status));
+
+            // Format actual times (time columns may be strings or DateTime instances)
+            $formatTime = function ($value) {
+                if (! $value) {
+                    return null;
+                }
+
+                if (is_string($value)) {
+                    // Try common time formats
+                    try {
+                        return \Carbon\Carbon::createFromFormat('H:i:s', $value)->format('h:i A');
+                    } catch (\Throwable $e) {
+                        try {
+                            return \Carbon\Carbon::parse($value)->format('h:i A');
+                        } catch (\Throwable $_) {
+                            return (string) $value;
+                        }
+                    }
+                }
+
+                try {
+                    return $value->format('h:i A');
+                } catch (\Throwable $_) {
+                    return null;
+                }
+            };
+
+            return [
+                'date' => $record->record_date?->format('M d, Y') ?? '-',
+                'time_in' => $formatTime($record->time_in),
+                'time_out' => $formatTime($record->time_out),
+                'scheduled' => $scheduledLabel,
+                'tardiness_minutes' => $record->tardiness_minutes,
+                'undertime_minutes' => $record->undertime_minutes,
+                'overtime_minutes' => $record->overtime_minutes,
+                'schedule_status' => $record->schedule_status,
+                'schedule_notes' => $record->schedule_notes,
+                'status' => $statusLabel,
+                'status_reason' => $record->status === 'present'
+                    ? $scheduleService->presentReason($record->schedule_notes)
+                    : null,
+            ];
+        });
+
+        $scheduleDays = $currentSchedule?->days->keyBy('day_name') ?? collect();
+
+        return view('employee.attendance', [
+            'records' => $mappedRecords,
+            'totals' => $totals,
+            'scheduleDays' => $scheduleService->weeklyDays(),
+            'currentSchedule' => $currentSchedule,
+            'weeklyWorkHours' => $scheduleService->weeklyWorkHoursLabel($currentSchedule),
+            'scheduleDayMap' => $scheduleDays,
+            'canEditSchedule' => $canEditSchedule,
+            'asksTermStart' => (bool) $employee?->isContractualFaculty(),
+            'overallResult' => $overallResult,
+            'periods' => $periods,
+            'selectedMonth' => $selectedDate->month,
+            'selectedYear' => $selectedDate->year,
+        ]);
+    }
+
+    public function storeSchedule(Request $request, EmployeeScheduleService $scheduleService): RedirectResponse
+    {
+        $employee = Employee::query()->where('email', $request->user()->email)->firstOrFail();
+        $existingSchedule = $scheduleService->currentSubmission($employee);
+
+        if ($existingSchedule && in_array($existingSchedule->status, [EmployeeScheduleSubmission::STATUS_PENDING, EmployeeScheduleSubmission::STATUS_APPROVED], true)) {
+            return back()->with('error', 'You already have an active schedule submission. Please wait for HR review or request a reset before submitting again.');
+        }
+
+        $rules = [];
+        foreach ($scheduleService->weeklyDays() as $day) {
+            $rules["days.{$day['key']}.mode"] = ['required', 'in:with_work,no_work'];
+            $rules["days.{$day['key']}.time_in"] = ['nullable', 'required_if:days.'.$day['key'].'.mode,with_work', 'date_format:H:i'];
+            $rules["days.{$day['key']}.time_out"] = ['nullable', 'required_if:days.'.$day['key'].'.mode,with_work', 'date_format:H:i', 'after:days.'.$day['key'].'.time_in'];
+        }
+
+        $rules['term_label'] = ['required', 'string', 'in:'.implode(',', self::ALLOWED_TERM_LABELS)];
+        // Contractual full-time faculty leave resets per term, starting on this date once HR approves.
+        $rules['term_start_date'] = $employee->isContractualFaculty() ? ['required', 'date'] : ['prohibited'];
+
+        $validator = Validator::make($request->all(), $rules, [
+            'days.*.time_in.required_if' => 'Please enter a time in for each work day.',
+            'days.*.time_out.required_if' => 'Please enter a time out for each work day.',
+            'days.*.time_out.after' => 'The time out must be later than the time in.',
+            'term_start_date.required' => 'Please enter the date your term starts.',
+        ]);
+
+        foreach ($scheduleService->weeklyDays() as $day) {
+            $mode = data_get($request->all(), "days.{$day['key']}.mode");
+            if ($mode === 'with_work') {
+                EmployeeWorkTimeConstraints::applyToValidator(
+                    $validator,
+                    "days.{$day['key']}.time_in",
+                    "days.{$day['key']}.time_out",
+                );
+            }
+        }
+
+        $validated = $validator->validate();
+        $scheduleRows = $scheduleService->normalizeWeeklyInput($validated['days'] ?? []);
+
+        DB::transaction(function () use ($employee, $request, $scheduleRows, $validated, $existingSchedule): void {
+            $submission = EmployeeScheduleSubmission::query()->firstOrNew([
+                'employee_id' => $employee->id,
+                'semester_label' => $validated['term_label'],
+            ]);
+
+            $submission->fill([
+                'term_label' => $validated['term_label'],
+                'submitted_by' => $request->user()->id,
+                'submitted_at' => now(),
+                'academic_year' => null,
+                'term_start_date' => $validated['term_start_date'] ?? null,
+                'status' => EmployeeScheduleSubmission::STATUS_PENDING,
+                'reviewed_by' => null,
+                'reviewed_at' => null,
+                'review_notes' => null,
+                'is_current' => false,
+            ]);
+            $submission->save();
+
+            $submission->days()->delete();
+
+            foreach ($scheduleRows as $row) {
+                $submission->days()->create($row);
+            }
+
+            $announcement = Announcement::forceCreate([
+                'title' => sprintf('%s submitted a weekly schedule', $employee->full_name),
+                'content' => sprintf('%s submitted a weekly schedule for term "%s" and is waiting for HR approval.', $employee->full_name, $validated['term_label']),
+                'priority' => 'medium',
+                'target_employee_type' => 'hr',
+                'published_at' => now(),
+                'is_published' => true,
+                'created_by' => $request->user()->id,
+            ]);
+
+            $hrUserIds = User::query()->where('user_type', User::TYPE_HR)->pluck('id');
+
+            $rows = $hrUserIds->map(fn ($userId) => [
+                'announcement_id' => $announcement->id,
+                'user_id' => $userId,
+                'is_read' => false,
+                'read_at' => null,
+                'redirect_url' => route('schedules.index'),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ])->all();
+
+            if ($rows) {
+                AnnouncementNotification::insert($rows);
+            }
+        });
+
+        return back()->with('success', 'Your weekly schedule was submitted to HR for approval.');
+    }
+
+    public function leave(Request $request, LeaveBalanceService $leaveBalanceService): View
+    {
+        $employee = Employee::query()->where('email', $request->user()->email)->first();
+
+        // Get deductible leave balances (VL, SL, EL only)
+        $deductibleBalances = $employee
+            ? $leaveBalanceService->getDeductibleLeaveBalances($employee)
+                ->map(fn ($balance) => [
+                    'type' => $balance['type'],
+                    'remaining' => rtrim(rtrim(number_format($balance['remaining'], 2, '.', ''), '0'), '.'),
+                ])->values()
+            : collect();
+
+        // Get all leave history
+        $leaveHistory = $employee
+            ? $employee->leaveRequests()->latest('start_date')->get()->map(fn ($row) => [
+                'type' => $row->leave_type,
+                'start' => $row->start_date?->toDateString(),
+                'end' => $row->end_date?->toDateString(),
+                'days' => rtrim(rtrim(number_format($row->days_deducted, 2, '.', ''), '0'), '.'),
+                'status' => ucfirst($row->status),
+                'cutoff' => $row->cutoff_date?->format('M d, Y') ?? '-',
+                'reason' => $row->reason,
+            ])->values()
+            : collect();
+
+        // Get detailed leave usage breakdown (deductible vs tracked-only)
+        $leaveUsageBreakdown = $employee
+            ? $leaveBalanceService->getLeaveUsageBreakdown($employee)
+            : [
+                'deductible' => [],
+                'tracked_only' => [],
+            ];
+
+        // For backward compatibility, also provide simple usage counts
+        $leaveUsage = [
+            'vacation_used' => 0,
+            'sick_used' => 0,
+            'emergency_used' => 0,
+        ];
+
+        if ($employee) {
+            foreach ($leaveUsageBreakdown['deductible'] as $usage) {
+                if (str_contains(strtolower($usage['type']), 'vacation')) {
+                    $leaveUsage['vacation_used'] += $usage['days_used'];
+                } elseif (str_contains(strtolower($usage['type']), 'sick')) {
+                    $leaveUsage['sick_used'] += $usage['days_used'];
+                } elseif (str_contains(strtolower($usage['type']), 'emergency')) {
+                    $leaveUsage['emergency_used'] += $usage['days_used'];
+                }
+            }
+        }
+
+        return view('employee.leave', [
+            'leaveBalances' => $deductibleBalances,
+            'leaveHistory' => $leaveHistory,
+            'leaveUsage' => $leaveUsage,
+            'leaveUsageBreakdown' => $leaveUsageBreakdown,
+            'employee' => $employee,
+        ]);
+    }
+
+    public function profile(Request $request): View
+    {
+        $employee = Employee::query()
+            ->with(['department', 'credentials' => fn ($query) => $query
+                ->where('credential_type', 'degrees')
+                ->orderByRaw("CASE degree_level WHEN 'undergraduate' THEN 1 WHEN 'masters' THEN 2 WHEN 'doctoral' THEN 3 ELSE 4 END")])
+            ->where('email', $request->user()->email)
+            ->first();
+
+        return view('employee.profile', [
+            'employee' => $employee,
+            'departments' => Department::query()->schools()->orderBy('name')->get(),
+            'employeeTypes' => ['Faculty', 'ASP'],
+            'degrees' => $employee?->credentials ?? collect(),
+        ]);
+    }
+
+    public function updateProfile(Request $request, SupabaseAuthSyncService $authSync): RedirectResponse
+    {
+        $user = $request->user();
+        $employee = Employee::query()->where('email', $user->email)->firstOrFail();
+        $oldName = $employee->full_name;
+        $oldEmail = $employee->email;
+
+        $validated = $request->validate([
+            'first_name' => ['required', 'string', 'max:255'],
+            'last_name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'email', 'max:255', Rule::unique('employees', 'email')->ignore($employee->id), Rule::unique('users', 'email')->ignore($user->id)],
+        ]);
+
+        DB::transaction(function () use ($employee, $user, $validated, $authSync, $request, $oldName, $oldEmail): void {
+            $employee->update($validated);
+            $user->forceFill([
+                'name' => $employee->full_name,
+                'email' => $employee->email,
+            ])->save();
+            $authSync->syncUser($user, null);
+
+            $changedFields = [];
+            if ($oldName !== $employee->full_name) {
+                $changedFields[] = 'name: '.$oldName.' → '.$employee->full_name;
+            }
+            if ($oldEmail !== $employee->email) {
+                $changedFields[] = 'email: '.$oldEmail.' → '.$employee->email;
+            }
+
+            if ($changedFields === []) {
+                return;
+            }
+
+            $announcement = Announcement::forceCreate([
+                'title' => 'Employee Profile Updated',
+                'content' => $employee->full_name.' updated their profile: '.implode('; ', $changedFields).'.',
+                'type' => Announcement::TYPE_NOTIFICATION,
+                'priority' => 'medium',
+                'target_user_type' => User::TYPE_HR,
+                'is_published' => true,
+                'published_at' => now(),
+                'created_by' => $user->id,
+            ]);
+
+            $rows = User::query()
+                ->where('user_type', User::TYPE_HR)
+                ->pluck('id')
+                ->map(fn ($userId) => [
+                    'announcement_id' => $announcement->id,
+                    'user_id' => $userId,
+                    'is_read' => false,
+                    'read_at' => null,
+                    'redirect_url' => route('employees.index'),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ])->all();
+
+            if ($rows !== []) {
+                AnnouncementNotification::insert($rows);
+            }
+        });
+
+        return redirect()->route('employee.profile')->with('success', 'Your profile was updated successfully. HR has been notified.');
+    }
+
+    public function storeDegree(StoreDegreeSubmissionRequest $request, SupabaseStorageService $storage): RedirectResponse
+    {
+        $employee = Employee::query()->where('email', $request->user()->email)->firstOrFail();
+        $degreeLevel = $request->string('degree_level')->toString();
+
+        $existing = EmployeeCredential::query()
+            ->where('employee_id', $employee->id)
+            ->where('credential_type', 'degrees')
+            ->where('degree_level', $degreeLevel)
+            ->exists();
+
+        if ($existing) {
+            return back()->with('error', 'Delete the existing '.$this->degreeLevelLabel($degreeLevel).' before uploading a new file.');
+        }
+
+        if (! $storage->isEnabled()) {
+            return back()->with('error', 'File storage is not configured. Please contact the administrator.');
+        }
+
+        $file = $request->file('degree_file');
+
+        try {
+            $filePath = $storage->uploadFile($file, 'employee-'.$employee->id.'/degrees');
+        } catch (\Throwable $exception) {
+            Log::error('Degree file upload failed', [
+                'employee_id' => $employee->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return back()->withInput()->with('error', 'The degree file could not be uploaded. Please try again.');
+        }
+
+        DB::transaction(function () use ($request, $employee, $degreeLevel, $file, $filePath): void {
+            $credential = EmployeeCredential::create([
+                'employee_id' => $employee->id,
+                'credential_type' => 'degrees',
+                'degree_level' => $degreeLevel,
+                'title' => $this->degreeLevelLabel($degreeLevel),
+                'department_id' => $employee->department_id,
+                'file_path' => $filePath,
+                'original_filename' => $file->getClientOriginalName(),
+                'status' => 'pending',
+            ]);
+
+            $announcement = Announcement::create([
+                'title' => 'New degree submission',
+                'content' => sprintf('%s submitted a %s for HR review.', $employee->full_name, $credential->title),
+                'priority' => 'medium',
+                'target_user_type' => User::TYPE_HR,
+                'published_at' => now(),
+                'is_published' => true,
+                'created_by' => $request->user()->id,
+            ]);
+
+            $now = now();
+            $rows = User::query()->where('user_type', User::TYPE_HR)->get(['id'])->map(fn (User $user) => [
+                'announcement_id' => $announcement->id,
+                'user_id' => $user->id,
+                'is_read' => false,
+                'read_at' => null,
+                'redirect_url' => route('employees.profile', ['employee' => $employee->id]),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ])->all();
+
+            if ($rows !== []) {
+                AnnouncementNotification::insert($rows);
+            }
+        });
+
+        return back()->with('success', $this->degreeLevelLabel($degreeLevel).' submitted for HR review.');
+    }
+
+    public function destroyDegree(Request $request, EmployeeCredential $credential, SupabaseStorageService $storage): RedirectResponse
+    {
+        $employee = Employee::query()->where('email', $request->user()->email)->firstOrFail();
+        abort_unless($credential->employee_id === $employee->id && $credential->credential_type === 'degrees', 403);
+
+        $filePath = $credential->file_path;
+        $credential->delete();
+
+        if ($filePath && $storage->isEnabled() && ! $storage->delete($filePath)) {
+            Log::warning('Unable to delete degree file from storage', ['credential_id' => $credential->id, 'file_path' => $filePath]);
+        }
+
+        return back()->with('success', 'Degree submission deleted. You may upload a new file.');
+    }
+
+    private function degreeLevelLabel(string $degreeLevel): string
+    {
+        return match ($degreeLevel) {
+            'undergraduate' => 'Undergraduate Degree',
+            'masters' => "Master's Degree",
+            'doctoral' => 'Doctoral Degree',
+            default => 'Academic Degree',
+        };
+    }
+
+    /**
+     * Change the employee's password.
+     * Requires current (old) password + new password + confirmation.
+     */
+    public function changePassword(Request $request): RedirectResponse
+    {
+        $request->validate([
+            'current_password' => ['required', 'string'],
+            'new_password' => ['required', 'string', 'min:6', 'confirmed'],
+        ], [
+            'current_password.required' => 'Please enter your current password.',
+            'new_password.required' => 'Please enter a new password.',
+            'new_password.min' => 'New password must be at least 6 characters.',
+            'new_password.confirmed' => 'New password and confirmation do not match.',
+        ]);
+
+        $user = $request->user();
+
+        if (! \Illuminate\Support\Facades\Hash::check($request->input('current_password'), $user->password)) {
+            return back()->withErrors([
+                'current_password' => 'The current password you entered is incorrect.',
+            ])->with('password_error', true);
+        }
+
+        $supabaseAuth = app(SupabaseAuthSyncService::class);
+        $newPassword = $request->input('new_password');
+
+        if ($supabaseAuth->isConfigured() && ! $supabaseAuth->updateUserPassword($user, $newPassword)) {
+            return back()->withErrors([
+                'new_password' => 'Your password could not be synchronized. Please try again.',
+            ])->with('password_error', true);
+        }
+
+        $user->forceFill([
+            'password' => \Illuminate\Support\Facades\Hash::make($newPassword),
+        ])->save();
+
+        return redirect()->route('employee.profile')->with('password_success', 'Password changed successfully.');
+    }
+
+    private function buildAttendanceResult(array $totals, ?EmployeeScheduleSubmission $currentSchedule, bool $hasRecords): array
+    {
+        if (! $hasRecords) {
+            return [
+                'label' => 'No DTR yet',
+                'description' => 'Attendance records have not been uploaded yet.',
+                'variant' => 'neutral',
+            ];
+        }
+
+        if ($currentSchedule && $currentSchedule->status === EmployeeScheduleSubmission::STATUS_PENDING) {
+            return [
+                'label' => 'For approval',
+                'description' => 'Your schedule is waiting for HR approval.',
+                'variant' => 'warning',
+            ];
+        }
+
+        if (($totals['absences'] ?? 0) > 0) {
+            return [
+                'label' => 'Needs attention',
+                'description' => 'Your DTR has absences that need review.',
+                'variant' => 'danger',
+            ];
+        }
+
+        if (($totals['tardiness'] ?? 0) > 0 || ($totals['undertime'] ?? 0) > 0) {
+            return [
+                'label' => 'With deductions',
+                'description' => 'Your DTR has tardiness or undertime entries.',
+                'variant' => 'warning',
+            ];
+        }
+
+        return [
+            'label' => 'Good standing',
+            'description' => 'Your DTR is clear based on the current records.',
+            'variant' => 'success',
+        ];
+    }
+
+}

@@ -1,0 +1,248 @@
+@extends('employee.layout')
+
+@section('title', 'Profile')
+@section('page_title', 'Profile')
+
+@section('content')
+    @if (session('success'))
+        <div class="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ session('success') }}</div>
+    @endif
+    @if (session('password_success'))
+        <div class="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ session('password_success') }}</div>
+    @endif
+    @if (session('error'))
+        <div class="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">{{ session('error') }}</div>
+    @endif
+
+    <article class="overflow-hidden rounded-2xl border border-slate-300 bg-white shadow-sm">
+        <div class="h-20 bg-[#003a78]"></div>
+        <div class="flex flex-wrap items-end gap-4 px-6 pb-6">
+            <div class="-mt-10 grid h-24 w-24 place-content-center rounded-2xl border-4 border-white bg-slate-200 text-2xl font-bold text-slate-700">{{ str(auth()->user()->name)->explode(' ')->take(2)->map(fn ($part) => strtoupper(substr($part, 0, 1)))->join('') }}</div>
+            <div>
+                <p class="text-2xl font-bold text-slate-900">{{ auth()->user()->name }}</p>
+                <p class="text-sm text-slate-500">{{ auth()->user()->email }}</p>
+            </div>
+        </div>
+    </article>
+
+    <article class="rounded-2xl border border-slate-300 bg-white p-6 shadow-sm">
+        <div class="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+                <h2 class="text-3xl font-bold text-slate-900">Personal Information</h2>
+                <p class="mt-1 text-sm text-slate-500">You may update only your name and email address. HR will be notified of any changes.</p>
+            </div>
+            <button type="button" id="edit-personal-information" class="rounded-lg border border-blue-300 bg-white px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50">Edit</button>
+        </div>
+
+        <form id="personal-information-form" class="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2" method="POST" action="{{ route('employee.profile.update') }}">
+            @csrf
+            @method('PATCH')
+            <div>
+                <label for="profile_first_name" class="mb-1 block text-sm font-semibold text-slate-700">First Name *</label>
+                <input id="profile_first_name" name="first_name" type="text" value="{{ old('first_name', $employee?->first_name) }}" readonly required class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none">
+                @error('first_name')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+            </div>
+            <div>
+                <label for="profile_last_name" class="mb-1 block text-sm font-semibold text-slate-700">Last Name *</label>
+                <input id="profile_last_name" name="last_name" type="text" value="{{ old('last_name', $employee?->last_name) }}" readonly required class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none">
+                @error('last_name')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+            </div>
+            <div class="md:col-span-2">
+                <label for="profile_email" class="mb-1 block text-sm font-semibold text-slate-700">Email *</label>
+                <input id="profile_email" name="email" type="email" value="{{ old('email', $employee?->email ?? auth()->user()->email) }}" readonly required class="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none">
+                @error('email')<p class="mt-1 text-xs text-red-600">{{ $message }}</p>@enderror
+            </div>
+            <div class="md:col-span-2 flex justify-end">
+                <button type="submit" id="save-personal-information" class="hidden rounded-lg bg-[#003a78] px-4 py-2 text-sm font-semibold text-white hover:bg-[#002f61]">Save Changes</button>
+            </div>
+        </form>
+    </article>
+
+    <script @cspNonce>
+        const editPersonalInformation = document.getElementById('edit-personal-information');
+        const savePersonalInformation = document.getElementById('save-personal-information');
+        const personalInformationForm = document.getElementById('personal-information-form');
+
+        editPersonalInformation?.addEventListener('click', () => {
+            personalInformationForm?.querySelectorAll('input[name="first_name"], input[name="last_name"], input[name="email"]').forEach((input) => {
+                input.readOnly = false;
+                input.classList.remove('bg-slate-50');
+            });
+            editPersonalInformation.classList.add('hidden');
+            savePersonalInformation?.classList.remove('hidden');
+            personalInformationForm?.querySelector('input[name="first_name"]')?.focus();
+        });
+    </script>
+
+    <article class="rounded-2xl border border-slate-300 bg-white p-6 shadow-sm">
+        <h2 class="text-3xl font-bold text-slate-900">Profile Information</h2>
+        <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 lg:col-span-2">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500">Read Only Details</h3>
+                <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Department</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900">{{ $employee?->department?->name ?? '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Position</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900">{{ $employee?->position ?? '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Employee Type</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900">{{ $employee?->employment_type ?? '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Employee ID</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900">{{ $employee?->employee_id ?? '—' }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Date Hired</p>
+                        <p class="mt-1 text-sm font-semibold text-slate-900">{{ optional($employee?->hire_date)->format('M d, Y') ?? '—' }}</p>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </article>
+
+    <article class="rounded-2xl border border-slate-300 bg-white p-6 shadow-sm">
+        <div class="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+                <h2 class="text-3xl font-bold text-slate-900">Academic Degrees</h2>
+                <p class="mt-1 text-sm text-slate-500">Submit one PDF per degree level. Each file must be no larger than 5 MB.</p>
+            </div>
+        </div>
+
+        @if ($errors->any())
+            <div class="mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">{{ $errors->first() }}</div>
+        @endif
+
+        <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+            @foreach (['undergraduate' => 'Undergraduate Degree', 'masters' => "Master's Degree", 'doctoral' => 'Doctoral Degree'] as $level => $label)
+                @php($degree = $degrees->firstWhere('degree_level', $level))
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div class="flex items-start justify-between gap-3">
+                        <h3 class="font-bold text-slate-900">{{ $label }}</h3>
+                        @if ($degree)
+                            <span class="rounded-full px-2.5 py-1 text-xs font-semibold {{ $degree->status === 'verified' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700' }}">{{ ucfirst($degree->status) }}</span>
+                        @endif
+                    </div>
+
+                    @if ($degree)
+                        <p class="mt-3 truncate text-sm text-slate-600" title="{{ $degree->original_filename }}">{{ $degree->original_filename }}</p>
+                        <p class="mt-1 text-xs text-slate-500">Submitted {{ $degree->created_at?->format('M d, Y') }}</p>
+                        @if ($degree->review_notes)
+                            <p class="mt-2 text-xs text-slate-600">HR note: {{ $degree->review_notes }}</p>
+                        @endif
+                        <div class="mt-4 flex flex-wrap gap-2">
+                            <a href="{{ route('employee.profile.degrees.view', $degree) }}" target="_blank" rel="noopener noreferrer" class="rounded-lg border border-blue-300 bg-white px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50">View PDF</a>
+                            <form method="POST" action="{{ route('employee.profile.degrees.destroy', $degree) }}" onsubmit="return confirm('Delete this degree submission so you can upload a new file?');">
+                                @csrf
+                                @method('DELETE')
+                                <button type="submit" class="rounded-lg border border-red-300 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50">Delete</button>
+                            </form>
+                        </div>
+                    @else
+                        <form class="mt-4 space-y-3" method="POST" action="{{ route('employee.profile.degrees.store') }}" enctype="multipart/form-data">
+                            @csrf
+                            <input type="hidden" name="degree_level" value="{{ $level }}">
+                            <input type="file" name="degree_file" accept="application/pdf,.pdf" required class="block w-full rounded-lg border border-slate-300 bg-white p-2 text-xs text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-blue-700">
+                            <button type="submit" class="w-full rounded-lg bg-[#003a78] px-3 py-2 text-sm font-semibold text-white hover:bg-[#002f61]">Upload PDF</button>
+                        </form>
+                    @endif
+                </div>
+            @endforeach
+        </div>
+    </article>
+
+    {{-- Change Password Section --}}
+    <article class="rounded-2xl border border-slate-300 bg-white p-6 shadow-sm">
+        <h2 class="text-3xl font-bold text-slate-900">Change Password</h2>
+        <p class="mt-1 text-sm text-slate-500">Update your profile password. Use your current temporary password or existing password.</p>
+
+        @if ($errors->has('current_password'))
+            <div class="mt-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">{{ $errors->first('current_password') }}</div>
+        @endif
+        @if ($errors->has('new_password'))
+            <div class="mt-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">{{ $errors->first('new_password') }}</div>
+        @endif
+
+        <form class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3 js-loading-form" method="POST" action="{{ route('employee.profile.change-password') }}">
+            @csrf
+            <div>
+                <label class="mb-2 block text-sm font-semibold text-slate-700">Current Password *</label>
+                <div class="relative">
+                    <input id="current_password" name="current_password" type="password" class="w-full rounded-lg border border-slate-300 px-3 py-2 pr-10 text-sm @error('current_password') border-red-400 @enderror" placeholder="Enter current/temporary password" required>
+                    <button type="button" onclick="togglePassword('current_password', this)" class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                        <svg class="w-5 h-5 eye-show" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg>
+                        <svg class="w-5 h-5 eye-hide hidden" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88" /></svg>
+                    </button>
+                </div>
+                <p class="mt-1 text-xs text-slate-500">This is your temporary password from HR or your current password.</p>
+            </div>
+            <div>
+                <label class="mb-2 block text-sm font-semibold text-slate-700">New Password *</label>
+                <div class="relative">
+                    <input id="new_password" name="new_password" type="password" class="w-full rounded-lg border border-slate-300 px-3 py-2 pr-10 text-sm @error('new_password') border-red-400 @enderror" placeholder="Min 6 characters" required minlength="6">
+                    <button type="button" onclick="togglePassword('new_password', this)" class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                        <svg class="w-5 h-5 eye-show" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg>
+                        <svg class="w-5 h-5 eye-hide hidden" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88" /></svg>
+                    </button>
+                </div>
+            </div>
+            <div>
+                <label class="mb-2 block text-sm font-semibold text-slate-700">Confirm New Password *</label>
+                <div class="relative">
+                    <input id="new_password_confirmation" name="new_password_confirmation" type="password" class="w-full rounded-lg border border-slate-300 px-3 py-2 pr-10 text-sm" placeholder="Re-enter new password" required>
+                    <button type="button" onclick="togglePassword('new_password_confirmation', this)" class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                        <svg class="w-5 h-5 eye-show" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg>
+                        <svg class="w-5 h-5 eye-hide hidden" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88" /></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="lg:col-span-3">
+                <button type="submit" class="float-right rounded-xl bg-[#003a78] px-6 py-2 text-sm font-semibold text-white hover:bg-[#002f61]">Change Password</button>
+            </div>
+        </form>
+    </article>
+
+    {{-- Global Loading Overlay --}}
+    <div id="loading-overlay" class="fixed inset-0 z-[100] hidden items-center justify-center bg-black/50">
+        <div class="rounded-2xl bg-white px-8 py-6 shadow-2xl text-center">
+            <svg class="mx-auto h-10 w-10 animate-spin text-[#003a78]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="mt-3 text-lg font-semibold text-blue-900">Saving...</p>
+            <p class="text-sm text-slate-500">Please wait.</p>
+        </div>
+    </div>
+@endsection
+
+@push('scripts')
+    <script @cspNonce>
+        function togglePassword(inputId, button) {
+            const input = document.getElementById(inputId);
+            const showIcon = button.querySelector('.eye-show');
+            const hideIcon = button.querySelector('.eye-hide');
+            if (input.type === 'password') {
+                input.type = 'text';
+                showIcon.classList.add('hidden');
+                hideIcon.classList.remove('hidden');
+            } else {
+                input.type = 'password';
+                showIcon.classList.remove('hidden');
+                hideIcon.classList.add('hidden');
+            }
+        }
+
+        // Loading overlay for all forms
+        const loadingOverlay = document.getElementById('loading-overlay');
+        document.querySelectorAll('.js-loading-form').forEach(form => {
+            form.addEventListener('submit', function() {
+                if (loadingOverlay) { loadingOverlay.classList.remove('hidden'); loadingOverlay.classList.add('flex'); }
+            });
+        });
+    </script>
+@endpush
